@@ -59,6 +59,18 @@ createdb banking
 mvn spring-boot:run -Dspring-boot.run.profiles=postgres   # DB_USER / DB_PASSWORD env vars
 ```
 
+## Operational endpoints (Spring Boot Actuator)
+
+Production services need to prove they're healthy before a load balancer sends them traffic. Actuator exposes:
+
+| Endpoint | Purpose |
+|---|---|
+| `/actuator/health` | Liveness/readiness — includes a real database connectivity check (`db: UP`), not just "the process exists" |
+| `/actuator/metrics` | JVM memory, HTTP request latencies (`http.server.requests`), connection-pool stats |
+| `/actuator/info` | App name/version for deployment verification |
+
+In a real deployment these would back Kubernetes probes and a Grafana dashboard; only `health` would be exposed publicly.
+
 ## Tests & CI
 
 ```bash

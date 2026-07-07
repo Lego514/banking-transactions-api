@@ -12,6 +12,24 @@ spring:
     console:
       enabled: true
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, metrics
+  endpoint:
+    health:
+      show-details: always
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: banking-transactions-api
+    description: RESTful banking transactions service with atomic transfers
+    version: 0.1.0
+
 ---
 # Run with: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
 spring:
