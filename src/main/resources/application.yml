@@ -1,0 +1,27 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:banking;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+
+---
+# Run with: mvn spring-boot:run -Dspring-boot.run.profiles=postgres
+spring:
+  config:
+    activate:
+      on-profile: postgres
+  datasource:
+    url: jdbc:postgresql://localhost:5432/banking
+    username: ${DB_USER:banking}
+    password: ${DB_PASSWORD:banking}
+  jpa:
+    hibernate:
+      ddl-auto: update
