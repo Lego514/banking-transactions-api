@@ -1,6 +1,8 @@
 # Banking Transactions API
 
-**RESTful banking transactions service with atomic transfers — Spring Boot 3, JPA, row-level locking, JUnit-tested service layer, and a zero-dependency web console.**
+[![CI](https://github.com/Lego514/banking-transactions-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Lego514/banking-transactions-api/actions/workflows/ci.yml)
+
+**RESTful banking transactions service with atomic transfers — Spring Boot 3, JPA, row-level locking, JUnit-tested service layer, CI on every push, and a zero-dependency web console.**
 
 A small but production-shaped core banking service: open accounts, move money, and audit every cent through an immutable transaction ledger. Built to demonstrate the engineering concerns banks actually care about — atomicity, concurrency safety, and auditability — not framework tourism.
 
@@ -57,11 +59,13 @@ createdb banking
 mvn spring-boot:run -Dspring-boot.run.profiles=postgres   # DB_USER / DB_PASSWORD env vars
 ```
 
-## Tests
+## Tests & CI
 
 ```bash
 mvn test
 ```
+
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs the full suite on JDK 21; failed runs upload the surefire reports as an artifact for debugging.
 
 19 tests across two layers:
 
