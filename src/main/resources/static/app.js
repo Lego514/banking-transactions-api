@@ -2,6 +2,9 @@ const API = "/api";
 const fmtMoney = (n) => Number(n).toLocaleString("en-US", { style: "currency", currency: "USD" });
 const fmtTime = (iso) => new Date(iso).toLocaleString();
 
+const INFLOW = new Set(["DEPOSIT", "TRANSFER_IN"]);
+const AVATAR_HUES = [222, 262, 190, 152, 12, 322];
+
 let selectedAccountId = null;
 
 // ---------- API helper ----------
@@ -29,12 +32,32 @@ function toast(message, kind) {
   toastTimer = setTimeout(() => el.classList.add("hidden"), 3500);
 }
 
-// ---------- Accounts ----------
+// ---------- Accounts + KPIs ----------
 
 async function refreshAccounts() {
   const accounts = await api("/accounts");
+  renderKpis(accounts);
   renderAccountsTable(accounts);
   renderAccountSelects(accounts);
+}
+
+function renderKpis(accounts) {
+  const total = accounts.reduce((sum, a) => sum + Number(a.balance), 0);
+  document.getElementById("kpi-total").textContent = fmtMoney(total);
+  document.getElementById("kpi-accounts").textContent = accounts.length;
+  document.getElementById("kpi-avg").textContent =
+    fmtMoney(accounts.length ? total / accounts.length : 0);
+}
+
+function avatar(account) {
+  const initials = account.ownerName
+    .split(/\s+/)
+    .map((w) => w[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  const hue = AVATAR_HUES[account.id % AVATAR_HUES.length];
+  return `<span class="avatar" style="background:linear-gradient(135deg,hsl(${hue},70%,55%),hsl(${hue + 40},70%,45%))">${initials}</span>`;
 }
 
 function renderAccountsTable(accounts) {
@@ -46,11 +69,11 @@ function renderAccountsTable(accounts) {
   for (const acc of accounts) {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${acc.id}</td>
-      <td>${escapeHtml(acc.ownerName)}</td>
-      <td class="num">${fmtMoney(acc.balance)}</td>
-      <td>${fmtTime(acc.createdAt)}</td>
-      <td><button class="secondary small" data-history="${acc.id}" data-owner="${escapeHtml(acc.ownerName)}">History</button></td>`;
+      <td class="acct-id">#${acc.id}</td>
+      <td><span class="owner-cell">${avatar(acc)}${escapeHtml(acc.ownerName)}</span></td>
+      <td class="num balance-cell">${fmtMoney(acc.balance)}</td>
+      <td class="muted">${fmtTime(acc.createdAt)}</td>
+      <td><button class="ghost small" data-history="${acc.id}" data-owner="${escapeHtml(acc.ownerName)}">History</button></td>`;
     tbody.appendChild(tr);
   }
 }
@@ -79,13 +102,14 @@ async function showHistory(accountId, ownerName) {
   if (txns.length === 0) empty.textContent = "No transactions on this account yet.";
 
   for (const t of txns) {
+    const inflow = INFLOW.has(t.type);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${fmtTime(t.timestamp)}</td>
-      <td class="type-${t.type}">${t.type.replace("_", " ")}</td>
-      <td class="num">${fmtMoney(t.amount)}</td>
-      <td class="num">${fmtMoney(t.balanceAfter)}</td>
-      <td>${t.counterpartyAccountId ? "#" + t.counterpartyAccountId : "—"}</td>`;
+      <td class="muted">${fmtTime(t.timestamp)}</td>
+      <td><span class="pill ${inflow ? "pill-in" : "pill-out"}">${inflow ? "↓" : "↑"} ${t.type.replace("_", " ")}</span></td>
+      <td class="num ${inflow ? "amt-in" : "amt-out"}">${inflow ? "+" : "−"}${fmtMoney(t.amount)}</td>
+      <td class="num balance-cell">${fmtMoney(t.balanceAfter)}</td>
+      <td>${t.counterpartyAccountId ? `<span class="chip">#${t.counterpartyAccountId}</span>` : "—"}</td>`;
     tbody.appendChild(tr);
   }
 }

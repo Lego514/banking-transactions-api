@@ -4,24 +4,75 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Banking Transactions Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+<div class="bg-glow" aria-hidden="true"></div>
+
 <header>
-  <h1>Banking Transactions Console</h1>
-  <p class="tagline">Spring Boot 3 · REST API · Atomic transfers with row-level locking</p>
+  <div class="header-inner">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10l9-6 9 6"/><path d="M5 10v8M9.5 10v8M14.5 10v8M19 10v8"/><path d="M3 20h18"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Banking Transactions <span class="grad-text">Console</span></h1>
+        <p class="tagline">Atomic transfers · Row-level locking · Immutable ledger</p>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge">Spring Boot 3</span>
+      <span class="badge">JPA</span>
+      <span class="badge">H2 / PostgreSQL</span>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="kpi-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v20M17 6.5c0-1.9-2.2-3-5-3s-5 1.1-5 3 1.6 2.7 5 3.3 5 1.6 5 3.7-2.2 3-5 3-5-1.1-5-3"/></svg>
+      </div>
+      <div>
+        <p class="kpi-label">Total balance</p>
+        <p class="kpi-value" id="kpi-total">$0.00</p>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      </div>
+      <div>
+        <p class="kpi-label">Active accounts</p>
+        <p class="kpi-value" id="kpi-accounts">0</p>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-9 4 18 3-9h4"/></svg>
+      </div>
+      <div>
+        <p class="kpi-label">Average balance</p>
+        <p class="kpi-value" id="kpi-avg">$0.00</p>
+      </div>
+    </div>
+  </div>
 </header>
 
-<div id="toast" class="toast hidden"></div>
+<div id="toast" class="toast hidden" role="status"></div>
 
 <main>
   <section class="card">
-    <h2>Open Account</h2>
+    <h2><span class="dot dot-blue"></span>Open Account</h2>
     <form id="create-form">
       <label>Owner name
         <input type="text" id="owner-name" placeholder="e.g. Alice Chen" required maxlength="100">
       </label>
-      <label>Initial deposit (optional)
+      <label>Initial deposit <span class="opt">optional</span>
         <input type="number" id="initial-deposit" placeholder="0.00" min="0" step="0.01">
       </label>
       <button type="submit" class="primary">Create Account</button>
@@ -29,7 +80,7 @@
   </section>
 
   <section class="card">
-    <h2>Deposit / Withdraw</h2>
+    <h2><span class="dot dot-green"></span>Deposit / Withdraw</h2>
     <form id="cash-form">
       <label>Account
         <select id="cash-account" required></select>
@@ -39,43 +90,48 @@
       </label>
       <div class="btn-row">
         <button type="submit" data-action="deposit" class="primary">Deposit</button>
-        <button type="submit" data-action="withdraw" class="secondary">Withdraw</button>
+        <button type="submit" data-action="withdraw" class="ghost">Withdraw</button>
       </div>
     </form>
   </section>
 
   <section class="card">
-    <h2>Transfer</h2>
+    <h2><span class="dot dot-cyan"></span>Transfer</h2>
     <form id="transfer-form">
-      <label>From
-        <select id="transfer-from" required></select>
-      </label>
-      <label>To
-        <select id="transfer-to" required></select>
-      </label>
+      <div class="two-col">
+        <label>From
+          <select id="transfer-from" required></select>
+        </label>
+        <label>To
+          <select id="transfer-to" required></select>
+        </label>
+      </div>
       <label>Amount
         <input type="number" id="transfer-amount" placeholder="0.00" min="0.01" step="0.01" required>
       </label>
-      <button type="submit" class="primary">Transfer</button>
+      <button type="submit" class="primary">Send Transfer</button>
     </form>
   </section>
 
   <section class="card wide">
     <div class="card-head">
-      <h2>Accounts</h2>
-      <button id="refresh-btn" class="secondary small">Refresh</button>
+      <h2><span class="dot dot-blue"></span>Accounts</h2>
+      <button id="refresh-btn" class="ghost small">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+        Refresh
+      </button>
     </div>
     <table id="accounts-table">
       <thead>
-        <tr><th>ID</th><th>Owner</th><th class="num">Balance</th><th>Created</th><th></th></tr>
+        <tr><th>Account</th><th>Owner</th><th class="num">Balance</th><th>Opened</th><th></th></tr>
       </thead>
       <tbody></tbody>
     </table>
-    <p id="accounts-empty" class="empty">No accounts yet — open one above.</p>
+    <p id="accounts-empty" class="empty">No accounts yet — open one above to get started.</p>
   </section>
 
   <section class="card wide">
-    <h2>Transaction History <span id="history-owner" class="muted"></span></h2>
+    <h2><span class="dot dot-cyan"></span>Transaction History <span id="history-owner" class="muted"></span></h2>
     <table id="history-table">
       <thead>
         <tr><th>Time</th><th>Type</th><th class="num">Amount</th><th class="num">Balance After</th><th>Counterparty</th></tr>
@@ -87,7 +143,7 @@
 </main>
 
 <footer>
-  <p>banking-transactions-api · Spring Boot 3 + JPA + H2/PostgreSQL · built by Ray</p>
+  <p>banking-transactions-api &nbsp;·&nbsp; Spring Boot 3 + JPA + H2/PostgreSQL &nbsp;·&nbsp; built by Ray</p>
 </footer>
 
 <script src="app.js"></script>
