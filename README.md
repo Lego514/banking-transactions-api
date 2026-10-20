@@ -26,7 +26,7 @@ A small but production-shaped core banking service: open accounts, move money, a
 | `POST` | `/api/accounts/{id}/deposit` | `{amount}` | 400, 404 |
 | `POST` | `/api/accounts/{id}/withdraw` | `{amount}` | 400, 404, **409 insufficient funds** |
 | `GET` | `/api/accounts/{id}/transactions` | Ledger, newest first | 404 |
-| `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}` | 400, 404, 409 |
+| `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}`; optional `Idempotency-Key` header | 400, 404, 409, **422 key reused** |
 
 All errors return a consistent JSON body:
 
@@ -40,6 +40,7 @@ All errors return a consistent JSON body:
 - **Pessimistic row locks for concurrent updates.** Balance updates use `SELECT … FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`) so two simultaneous withdrawals can't both read the same balance and double-spend.
 - **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other. `TransferConcurrencyTest` checks this on a real PostgreSQL in CI: 100 opposite transfers released at once, with no deadlock, no money created or destroyed, and no balance below zero.
 - **Transfers are one database transaction.** The debit, credit, and both ledger rows commit together; if the debit fails everything rolls back (`@Transactional`).
+- **Idempotent transfers.** A client that times out can't tell whether its transfer happened, so it retries. With an `Idempotency-Key` header, the key's row is inserted first, in the same transaction as the transfer, and its primary key rejects a second use. A retry with the same key and body gets the stored response back (`Idempotent-Replayed: true`) and moves no money; the same key with a different body is rejected with 422; a transfer that fails rolls its key back, so retrying it runs it for real. `TransferConcurrencyTest` sends one request 8 times at once on a real PostgreSQL and checks the money moves once. The web console sends a key with every transfer, so a double-click can't pay twice.
 - **Ledger rows are immutable and store `balanceAfter`.** You can audit any account's history without replaying it, and no code path ever updates or deletes a ledger row.
 
 ## Running locally
@@ -74,25 +75,25 @@ As configured here, all three are public and `health` shows full details (databa
 ## Tests & CI
 
 ```bash
-mvn test                          # 19 tests on H2; the PostgreSQL tests are skipped
-POSTGRES_TESTS=true mvn test      # all 21 (needs Docker)
+mvn test                          # 23 tests on H2; the 3 PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 26 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 21 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 26 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-21 tests across three layers:
+26 tests across three layers:
 
 - **Service layer** (`AccountServiceTest`, 13 tests) — balance math, overdraft rejection, amount validation, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
-- **Web layer** (`AccountControllerTest`, 6 tests) — full HTTP round-trips through MockMvc asserting status codes and JSON error contracts (201/400/404/409)
-- **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 2 tests) — a smoke test that the datasource really is PostgreSQL, and a race: 50 A→B and 50 B→A transfers released together on 8 threads. It asserts that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. H2 can't stand in here, because the claim under test is how PostgreSQL's `SELECT … FOR UPDATE` behaves.
+- **Web layer** (`AccountControllerTest`, 10 tests) — full HTTP round-trips through MockMvc asserting status codes and JSON error contracts (201/400/404/409/422), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
+- **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 3 tests) — a smoke test that the datasource really is PostgreSQL, and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
 
 ## Repository structure
 
 ```
 src/main/java/com/ray/banking/
-├── model/        Account, TransactionRecord (JPA entities), TransactionType
+├── model/        Account, TransactionRecord, IdempotencyRecord (JPA entities), TransactionType
 ├── repository/   Spring Data repositories (incl. SELECT FOR UPDATE lock)
-├── service/      AccountService — all business rules and transaction boundaries
+├── service/      AccountService — business rules and transaction boundaries; IdempotencyService
 ├── web/          REST controllers, DTOs, global exception handler
 src/main/resources/static/   web console (vanilla HTML/CSS/JS)
 src/test/java/               service, controller, and PostgreSQL concurrency tests
@@ -101,7 +102,7 @@ src/test/java/               service, controller, and PostgreSQL concurrency tes
 ## What I'd do next with more time
 
 - JWT authentication and per-user account ownership
-- Idempotency keys on transfers so client retries can't double-move money
+- Expire idempotency keys after 24 hours, scope them per client once there is authentication, and extend them to deposits and withdrawals
 - Docker Compose (app + Postgres)
 - Pagination on the transactions endpoint
 

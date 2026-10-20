@@ -17,6 +17,7 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -53,6 +54,9 @@ class TransferConcurrencyTest {
 
     @Autowired
     private AccountService service;
+
+    @Autowired
+    private IdempotencyService idempotency;
 
     @Autowired
     private DataSource dataSource;
@@ -151,6 +155,49 @@ class TransferConcurrencyTest {
         assertThat(balanceB).isNotNegative();
         assertThat(ledgerEntries(a, b, TransactionType.TRANSFER_OUT)).isEqualTo(succeeded);
         assertThat(ledgerEntries(a, b, TransactionType.TRANSFER_IN)).isEqualTo(succeeded);
+    }
+
+    /**
+     * A retry storm: a client that timed out resends the same transfer, with the
+     * same Idempotency-Key, several times at once. Exactly one copy may move the
+     * money, and every other copy must get that copy's response back.
+     *
+     * <p>On PostgreSQL the losing INSERTs of the key wait for the winner's
+     * transaction and fail once it commits, so no copy should ever be told the
+     * request is still in progress; if one is, {@code get} throws and the test fails.
+     */
+    @Test
+    void sameIdempotencyKeyAtTheSameTime_movesMoneyOnce() throws Exception {
+        long a = service.createAccount("A", new BigDecimal("100.00")).getId();
+        long b = service.createAccount("B", null).getId();
+        String key = UUID.randomUUID().toString();
+        String request = "transfer from=%d to=%d amount=10".formatted(a, b);
+
+        ExecutorService pool = Executors.newFixedThreadPool(THREADS);
+        CountDownLatch startGate = new CountDownLatch(1);
+        List<IdempotencyService.Result> results = new ArrayList<>();
+        try {
+            List<Future<IdempotencyService.Result>> outcomes = new ArrayList<>();
+            for (int i = 0; i < THREADS; i++) {
+                outcomes.add(pool.submit(() -> {
+                    startGate.await();
+                    return idempotency.execute(key, request,
+                            () -> service.transfer(a, b, AMOUNT).from().getBalance().toPlainString());
+                }));
+            }
+            startGate.countDown();
+            for (Future<IdempotencyService.Result> outcome : outcomes) {
+                results.add(outcome.get(30, TimeUnit.SECONDS));
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(results).filteredOn(result -> !result.replayed()).hasSize(1);
+        assertThat(results).extracting(IdempotencyService.Result::responseBody).containsOnly("90.00");
+        assertThat(balanceOf(a)).isEqualByComparingTo("90.00");
+        assertThat(balanceOf(b)).isEqualByComparingTo("10.00");
+        assertThat(ledgerEntries(a, b, TransactionType.TRANSFER_OUT)).isEqualTo(1);
     }
 
     /** True if the transfer went through; false if it was refused for lack of funds, the one failure allowed here. */

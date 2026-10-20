@@ -1,6 +1,8 @@
 package com.ray.banking.web;
 
 import com.ray.banking.exception.AccountNotFoundException;
+import com.ray.banking.exception.IdempotencyKeyInProgressException;
+import com.ray.banking.exception.IdempotencyKeyReusedException;
 import com.ray.banking.exception.InsufficientFundsException;
 import com.ray.banking.exception.InvalidTransactionException;
 import org.springframework.http.HttpStatus;
@@ -33,6 +35,18 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiError> handleInsufficientFunds(InsufficientFundsException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiError.of(HttpStatus.CONFLICT, "INSUFFICIENT_FUNDS", ex.getMessage()));
+    }
+
+    @ExceptionHandler(IdempotencyKeyReusedException.class)
+    public ResponseEntity<ApiError> handleKeyReused(IdempotencyKeyReusedException ex) {
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiError.of(HttpStatus.UNPROCESSABLE_ENTITY, "IDEMPOTENCY_KEY_REUSED", ex.getMessage()));
+    }
+
+    @ExceptionHandler(IdempotencyKeyInProgressException.class)
+    public ResponseEntity<ApiError> handleKeyInProgress(IdempotencyKeyInProgressException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of(HttpStatus.CONFLICT, "IDEMPOTENCY_KEY_IN_PROGRESS", ex.getMessage()));
     }
 
     @ExceptionHandler(InvalidTransactionException.class)
