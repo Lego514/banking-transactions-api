@@ -12,6 +12,7 @@ import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Immutable ledger entry. One row per account per money movement — a transfer
@@ -20,7 +21,10 @@ import java.time.Instant;
  */
 @Entity
 @Table(name = "account_transactions",
-        indexes = @Index(name = "idx_txn_account", columnList = "accountId"))
+        indexes = {
+                @Index(name = "idx_txn_account", columnList = "accountId"),
+                @Index(name = "idx_txn_transfer", columnList = "transferId")
+        })
 public class TransactionRecord {
 
     @Id
@@ -43,6 +47,13 @@ public class TransactionRecord {
     /** The other account in a transfer; null for deposits and withdrawals. */
     private Long counterpartyAccountId;
 
+    /**
+     * Shared by the two legs of one transfer, so they can be paired exactly;
+     * null for deposits and withdrawals. The counterparty alone can't do it:
+     * two transfers of the same amount between the same accounts look alike.
+     */
+    private UUID transferId;
+
     @Column(nullable = false, updatable = false)
     private Instant timestamp;
 
@@ -51,12 +62,13 @@ public class TransactionRecord {
     }
 
     public TransactionRecord(Long accountId, TransactionType type, BigDecimal amount,
-                             BigDecimal balanceAfter, Long counterpartyAccountId) {
+                             BigDecimal balanceAfter, Long counterpartyAccountId, UUID transferId) {
         this.accountId = accountId;
         this.type = type;
         this.amount = amount;
         this.balanceAfter = balanceAfter;
         this.counterpartyAccountId = counterpartyAccountId;
+        this.transferId = transferId;
         this.timestamp = Instant.now();
     }
 
@@ -82,6 +94,10 @@ public class TransactionRecord {
 
     public Long getCounterpartyAccountId() {
         return counterpartyAccountId;
+    }
+
+    public UUID getTransferId() {
+        return transferId;
     }
 
     public Instant getTimestamp() {

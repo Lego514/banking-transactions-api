@@ -131,6 +131,12 @@ class AccountServiceTest {
             List<TransactionRecord> bobTxns = service.getTransactions(bob.getId());
             assertThat(bobTxns.get(0).getType()).isEqualTo(TransactionType.TRANSFER_IN);
             assertThat(bobTxns.get(0).getCounterpartyAccountId()).isEqualTo(alice.getId());
+
+            // Both legs carry the same transfer id; the initial deposit has none.
+            assertThat(aliceTxns.get(0).getTransferId())
+                    .isNotNull()
+                    .isEqualTo(bobTxns.get(0).getTransferId());
+            assertThat(aliceTxns.get(1).getTransferId()).isNull();
         }
 
         @Test

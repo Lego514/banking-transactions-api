@@ -41,7 +41,27 @@ All errors return a consistent JSON body:
 - **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other. `TransferConcurrencyTest` checks this on a real PostgreSQL in CI: 100 opposite transfers released at once, with no deadlock, no money created or destroyed, and no balance below zero.
 - **Transfers are one database transaction.** The debit, credit, and both ledger rows commit together; if the debit fails everything rolls back (`@Transactional`).
 - **Idempotent transfers.** A client that times out can't tell whether its transfer happened, so it retries. With an `Idempotency-Key` header, the key's row is inserted first, in the same transaction as the transfer, and its primary key rejects a second use. A retry with the same key and body gets the stored response back (`Idempotent-Replayed: true`) and moves no money; the same key with a different body is rejected with 422; a transfer that fails rolls its key back, so retrying it runs it for real. `TransferConcurrencyTest` sends one request 8 times at once on a real PostgreSQL and checks the money moves once. The web console sends a key with every transfer, so a double-click can't pay twice.
-- **Ledger rows are immutable and store `balanceAfter`.** You can audit any account's history without replaying it, and no code path ever updates or deletes a ledger row.
+- **Ledger rows are immutable and store `balanceAfter`.** You can audit any account's history without replaying it, and no code path ever updates or deletes a ledger row. Both legs of a transfer share a `transferId`, so they can be paired exactly.
+
+## Ledger reconciliation (SQL)
+
+[`sql/reconciliation.sql`](sql/reconciliation.sql) holds five checks. Each returns the rows that break one rule, so an empty result means the ledger is consistent:
+
+| Check | Rule | SQL used |
+|---|---|---|
+| `balance_matches_ledger` | Every stored balance equals the sum of its account's ledger | `LEFT JOIN`, `GROUP BY … HAVING` |
+| `balance_after_is_running_total` | Every ledger row's `balance_after` equals the running total up to that row | window function `SUM() OVER (PARTITION BY account_id ORDER BY id)` |
+| `transfer_legs_pair_up` | Every transfer has exactly one out leg and one in leg, same amount, each naming the other account | `COUNT(*) FILTER (WHERE …)` |
+| `no_negative_balances` | No balance, and no point in any ledger history, is below zero | `UNION ALL` |
+| `money_is_conserved` | Money in the bank = deposits − withdrawals; transfers only move it | CTE with scalar subqueries |
+
+The running total is ordered by ledger `id`, not timestamp: a ledger row is inserted while its account's row lock is held, so within one account the id order is the order the balance changes were applied.
+
+```bash
+psql -d banking -f sql/reconciliation.sql
+```
+
+`LedgerReconciliationTest` runs every check on PostgreSQL in CI after a workload that includes concurrent transfers. A check that never fires proves nothing, so the test also breaks the data once per check (an edited balance, an edited ledger row, a deleted transfer leg, an overdraft, money from nowhere), inside a rolled-back transaction, and asserts the check reports exactly that row.
 
 ## Running locally
 
@@ -75,17 +95,18 @@ As configured here, all three are public and `health` shows full details (databa
 ## Tests & CI
 
 ```bash
-mvn test                          # 23 tests on H2; the 3 PostgreSQL tests are skipped
-POSTGRES_TESTS=true mvn test      # all 26 (needs Docker)
+mvn test                          # 23 tests on H2; the 9 PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 32 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 26 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 32 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-26 tests across three layers:
+32 tests across three layers:
 
 - **Service layer** (`AccountServiceTest`, 13 tests) — balance math, overdraft rejection, amount validation, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
 - **Web layer** (`AccountControllerTest`, 10 tests) — full HTTP round-trips through MockMvc asserting status codes and JSON error contracts (201/400/404/409/422), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
 - **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 3 tests) — a smoke test that the datasource really is PostgreSQL, and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
+- **Ledger reconciliation on real PostgreSQL** (`LedgerReconciliationTest`, 6 tests) — every check in `sql/reconciliation.sql` passes on a clean ledger, and each one catches the corruption it is written for (see above).
 
 ## Repository structure
 
@@ -96,7 +117,8 @@ src/main/java/com/ray/banking/
 ├── service/      AccountService — business rules and transaction boundaries; IdempotencyService
 ├── web/          REST controllers, DTOs, global exception handler
 src/main/resources/static/   web console (vanilla HTML/CSS/JS)
-src/test/java/               service, controller, and PostgreSQL concurrency tests
+src/test/java/               service, controller, PostgreSQL concurrency and reconciliation tests
+sql/reconciliation.sql       ledger reconciliation checks
 ```
 
 ## What I'd do next with more time
