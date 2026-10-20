@@ -21,6 +21,12 @@ jobs:
 
       - name: Build and run tests
         run: mvn -B verify
+        env:
+          # Turns on the PostgreSQL-backed tests (Testcontainers). The runner
+          # has Docker; a machine without it skips them instead of failing.
+          # Set explicitly rather than auto-detecting Docker, so a broken Docker
+          # here fails the build instead of silently skipping the tests.
+          POSTGRES_TESTS: "true"
 
       - name: Upload test reports on failure
         if: failure()
