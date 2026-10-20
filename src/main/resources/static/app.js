@@ -11,8 +11,8 @@ let selectedAccountId = null;
 
 async function api(path, options = {}) {
   const res = await fetch(API + path, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: { "Content-Type": "application/json", ...options.headers },
   });
   const body = res.status === 204 ? null : await res.json();
   if (!res.ok) {
@@ -159,6 +159,11 @@ document.getElementById("cash-form").addEventListener("submit", async (e) => {
   }
 });
 
+// One key per transfer the user means to make. A double-click, or a resubmit
+// after a network error, sends the same key, so the server moves the money once.
+// A new key is drawn only after a transfer succeeds.
+let transferKey = crypto.randomUUID();
+
 document.getElementById("transfer-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fromAccountId = Number(document.getElementById("transfer-from").value);
@@ -167,8 +172,10 @@ document.getElementById("transfer-form").addEventListener("submit", async (e) =>
   try {
     const result = await api("/transfers", {
       method: "POST",
+      headers: { "Idempotency-Key": transferKey },
       body: JSON.stringify({ fromAccountId, toAccountId, amount }),
     });
+    transferKey = crypto.randomUUID();
     toast(`Transferred ${fmtMoney(amount)} from #${result.from.id} to #${result.to.id}`, "success");
     document.getElementById("transfer-amount").value = "";
     await refreshAll();

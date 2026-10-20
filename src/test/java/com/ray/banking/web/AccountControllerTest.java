@@ -7,10 +7,15 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.ResultActions;
+
+import java.util.UUID;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -98,5 +103,83 @@ class AccountControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].type").value("TRANSFER_IN"))
                 .andExpect(jsonPath("$[0].counterpartyAccountId").value((int) from));
+    }
+
+    private ResultActions transferWithKey(String key, long from, long to, String amount) throws Exception {
+        return mockMvc.perform(post("/api/transfers")
+                .header("Idempotency-Key", key)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"fromAccountId\":%d,\"toAccountId\":%d,\"amount\":%s}".formatted(from, to, amount)));
+    }
+
+    @Test
+    void transfer_retriedWithSameIdempotencyKey_movesMoneyOnceAndReplaysTheResponse() throws Exception {
+        long from = createAccount("Sender", "300.00");
+        long to = createAccount("Receiver", "0");
+        String key = UUID.randomUUID().toString();
+
+        String firstBody = transferWithKey(key, from, to, "120.50")
+                .andExpect(status().isOk())
+                .andExpect(header().string("Idempotent-Replayed", "false"))
+                .andReturn().getResponse().getContentAsString();
+
+        transferWithKey(key, from, to, "120.50")
+                .andExpect(status().isOk())
+                .andExpect(header().string("Idempotent-Replayed", "true"))
+                .andExpect(content().string(firstBody));
+
+        mockMvc.perform(get("/api/accounts/" + from))
+                .andExpect(jsonPath("$.balance").value(179.50));
+        mockMvc.perform(get("/api/accounts/" + to + "/transactions"))
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    void transfer_sameIdempotencyKeyWithDifferentRequest_returns422AndMovesNothingMore() throws Exception {
+        long from = createAccount("Sender", "300.00");
+        long to = createAccount("Receiver", "0");
+        String key = UUID.randomUUID().toString();
+
+        transferWithKey(key, from, to, "100.00").andExpect(status().isOk());
+
+        transferWithKey(key, from, to, "999.00")
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+        mockMvc.perform(get("/api/accounts/" + from))
+                .andExpect(jsonPath("$.balance").value(200.00));
+    }
+
+    @Test
+    void transfer_failedWithIdempotencyKey_canBeRetriedOnceTheCauseIsFixed() throws Exception {
+        long from = createAccount("Short", "50.00");
+        long to = createAccount("Payee", "0");
+        String key = UUID.randomUUID().toString();
+
+        transferWithKey(key, from, to, "100.00")
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_FUNDS"));
+
+        mockMvc.perform(post("/api/accounts/" + from + "/deposit")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amount\":100.00}"))
+                .andExpect(status().isOk());
+
+        // The failed attempt rolled its key back with it, so this is a real
+        // transfer, not a replay of the 409.
+        transferWithKey(key, from, to, "100.00")
+                .andExpect(status().isOk())
+                .andExpect(header().string("Idempotent-Replayed", "false"))
+                .andExpect(jsonPath("$.from.balance").value(50.00));
+    }
+
+    @Test
+    void transfer_idempotencyKeyTooLong_returns400() throws Exception {
+        long from = createAccount("Sender", "300.00");
+        long to = createAccount("Receiver", "0");
+
+        transferWithKey("k".repeat(256), from, to, "10.00")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_TRANSACTION"));
     }
 }
