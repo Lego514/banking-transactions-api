@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class AccountService {
@@ -31,7 +32,7 @@ public class AccountService {
         if (initialDeposit != null && initialDeposit.signum() > 0) {
             validateAmount(initialDeposit);
             account.credit(initialDeposit);
-            record(account, TransactionType.DEPOSIT, initialDeposit, null);
+            record(account, TransactionType.DEPOSIT, initialDeposit, null, null);
         }
         return account;
     }
@@ -52,7 +53,7 @@ public class AccountService {
         validateAmount(amount);
         Account account = lock(accountId);
         account.credit(amount);
-        record(account, TransactionType.DEPOSIT, amount, null);
+        record(account, TransactionType.DEPOSIT, amount, null, null);
         return account;
     }
 
@@ -61,7 +62,7 @@ public class AccountService {
         validateAmount(amount);
         Account account = lock(accountId);
         account.debit(amount);
-        record(account, TransactionType.WITHDRAWAL, amount, null);
+        record(account, TransactionType.WITHDRAWAL, amount, null, null);
         return account;
     }
 
@@ -85,8 +86,9 @@ public class AccountService {
 
         from.debit(amount);
         to.credit(amount);
-        record(from, TransactionType.TRANSFER_OUT, amount, to.getId());
-        record(to, TransactionType.TRANSFER_IN, amount, from.getId());
+        UUID transferId = UUID.randomUUID();
+        record(from, TransactionType.TRANSFER_OUT, amount, to.getId(), transferId);
+        record(to, TransactionType.TRANSFER_IN, amount, from.getId(), transferId);
         return new Transfer(from, to);
     }
 
@@ -101,9 +103,10 @@ public class AccountService {
                 .orElseThrow(() -> new AccountNotFoundException(accountId));
     }
 
-    private void record(Account account, TransactionType type, BigDecimal amount, Long counterpartyId) {
+    private void record(Account account, TransactionType type, BigDecimal amount,
+                        Long counterpartyId, UUID transferId) {
         transactionRepository.save(new TransactionRecord(
-                account.getId(), type, amount, account.getBalance(), counterpartyId));
+                account.getId(), type, amount, account.getBalance(), counterpartyId, transferId));
     }
 
     private void validateAmount(BigDecimal amount) {

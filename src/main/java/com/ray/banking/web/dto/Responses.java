@@ -6,6 +6,7 @@ import com.ray.banking.model.TransactionType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.UUID;
 
 public final class Responses {
 
@@ -22,11 +23,12 @@ public final class Responses {
 
     public record TransactionResponse(Long id, TransactionType type, BigDecimal amount,
                                       BigDecimal balanceAfter, Long counterpartyAccountId,
-                                      Instant timestamp) {
+                                      UUID transferId, Instant timestamp) {
 
         public static TransactionResponse from(TransactionRecord record) {
             return new TransactionResponse(record.getId(), record.getType(), record.getAmount(),
-                    record.getBalanceAfter(), record.getCounterpartyAccountId(), record.getTimestamp());
+                    record.getBalanceAfter(), record.getCounterpartyAccountId(), record.getTransferId(),
+                    record.getTimestamp());
         }
     }
 
