@@ -139,7 +139,9 @@ h1 {
 main {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* minmax(0, ...) lets a column shrink below its content, so long account
+     names in the selects can't push the grid wider than the page */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
   padding: 4px 32px 24px;
   max-width: 1200px;
@@ -157,7 +159,7 @@ main {
 }
 
 .card:hover { border-color: rgba(255, 255, 255, 0.16); }
-.card.wide { grid-column: 1 / -1; }
+.card.wide { grid-column: 1 / -1; overflow-x: auto; } /* tables scroll inside the card on phones */
 
 .card h2 {
   font-family: "Space Grotesk", sans-serif;
@@ -180,7 +182,7 @@ main {
 /* ---------- forms ---------- */
 
 form { display: flex; flex-direction: column; gap: 14px; }
-.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 
 label {
   display: flex;
@@ -357,7 +359,7 @@ footer {
 }
 
 @media (max-width: 900px) {
-  main { grid-template-columns: 1fr; padding: 4px 16px 20px; }
+  main { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 20px; }
   header { padding: 28px 16px 20px; }
   .kpis { grid-template-columns: 1fr; }
 }
