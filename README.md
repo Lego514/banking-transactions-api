@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Lego514/banking-transactions-api/actions/workflows/ci.yml/badge.svg)](https://github.com/Lego514/banking-transactions-api/actions/workflows/ci.yml)
 
-**RESTful banking transactions service with atomic transfers — Spring Boot 3, JPA, row-level locking, JUnit-tested service layer, CI on every push, and a zero-dependency web console.**
+**RESTful banking transactions service with atomic transfers — Spring Boot 3, JPA, row-level locking tested under concurrency on real PostgreSQL, CI on every push, and a zero-dependency web console.**
 
 A small but production-shaped core banking service: open accounts, move money, and audit every cent through an immutable transaction ledger. Built to demonstrate the engineering concerns banks actually care about — atomicity, concurrency safety, and auditability — not framework tourism.
 
@@ -38,7 +38,7 @@ All errors return a consistent JSON body:
 
 - **`BigDecimal` for money, never `double`.** Binary floating point cannot represent 0.10 exactly; ledgers drift. Amounts are validated to ≤ 2 decimal places at the service boundary.
 - **Pessimistic row locks for concurrent updates.** Balance updates use `SELECT … FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`) so two simultaneous withdrawals can't both read the same balance and double-spend.
-- **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other.
+- **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other. `TransferConcurrencyTest` checks this on a real PostgreSQL in CI: 100 opposite transfers released at once, with no deadlock, no money created or destroyed, and no balance below zero.
 - **Transfers are one database transaction.** The debit, credit, and both ledger rows commit together; if the debit fails everything rolls back (`@Transactional`).
 - **Ledger rows are immutable and store `balanceAfter`.** You can audit any account's history without replaying it, and no code path ever updates or deletes a ledger row.
 
@@ -65,24 +65,26 @@ Production services need to prove they're healthy before a load balancer sends t
 
 | Endpoint | Purpose |
 |---|---|
-| `/actuator/health` | Liveness/readiness — includes a real database connectivity check (`db: UP`), not just "the process exists" |
+| `/actuator/health` | Overall status, including a real database connectivity check (`db: UP`), not just "the process exists" |
 | `/actuator/metrics` | JVM memory, HTTP request latencies (`http.server.requests`), connection-pool stats |
 | `/actuator/info` | App name/version for deployment verification |
 
-In a real deployment these would back Kubernetes probes and a Grafana dashboard; only `health` would be exposed publicly.
+As configured here, all three are public and `health` shows full details (database type, disk space), which suits a local demo. A real deployment would expose only `health` (`management.endpoints.web.exposure.include=health`), hide its details from anonymous callers (`management.endpoint.health.show-details=when-authorized`), and serve metrics to Prometheus on an internal management port (`management.server.port`). On Kubernetes, Spring Boot also adds `/actuator/health/liveness` and `/actuator/health/readiness` for the probes.
 
 ## Tests & CI
 
 ```bash
-mvn test
+mvn test                          # 19 tests on H2; the PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 21 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs the full suite on JDK 21; failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 21 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-19 tests across two layers:
+21 tests across three layers:
 
 - **Service layer** (`AccountServiceTest`, 13 tests) — balance math, overdraft rejection, amount validation, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
 - **Web layer** (`AccountControllerTest`, 6 tests) — full HTTP round-trips through MockMvc asserting status codes and JSON error contracts (201/400/404/409)
+- **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 2 tests) — a smoke test that the datasource really is PostgreSQL, and a race: 50 A→B and 50 B→A transfers released together on 8 threads. It asserts that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. H2 can't stand in here, because the claim under test is how PostgreSQL's `SELECT … FOR UPDATE` behaves.
 
 ## Repository structure
 
@@ -93,15 +95,14 @@ src/main/java/com/ray/banking/
 ├── service/      AccountService — all business rules and transaction boundaries
 ├── web/          REST controllers, DTOs, global exception handler
 src/main/resources/static/   web console (vanilla HTML/CSS/JS)
-src/test/java/               service + controller tests
+src/test/java/               service, controller, and PostgreSQL concurrency tests
 ```
 
 ## What I'd do next with more time
 
 - JWT authentication and per-user account ownership
-- A concurrency stress test (parallel transfers asserting conservation of money)
 - Idempotency keys on transfers so client retries can't double-move money
-- Docker Compose (app + Postgres) and a GitHub Actions CI pipeline
+- Docker Compose (app + Postgres)
 - Pagination on the transactions endpoint
 
 ## About me
