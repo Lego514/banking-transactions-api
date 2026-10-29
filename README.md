@@ -28,11 +28,13 @@ A small but production-shaped core banking service: open accounts, move money, a
 | `GET` | `/api/accounts/{id}/transactions` | Ledger, newest first | 404 |
 | `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}`; optional `Idempotency-Key` header | 400, 404, 409, **422 key reused** |
 
-All errors return a consistent JSON body:
+Business and validation errors (the codes in the table) return a consistent JSON body:
 
 ```json
 { "status": 409, "code": "INSUFFICIENT_FUNDS", "message": "Account 1 has insufficient funds: balance 5.00, requested 10.00", "timestamp": "..." }
 ```
+
+Errors raised by the framework or the database don't go through that handler yet: a non-numeric id such as `/api/accounts/abc` returns a 400 with an empty body, and an amount too large for the `numeric(19,2)` column returns a 500.
 
 ## Engineering decisions worth asking me about
 
@@ -124,10 +126,11 @@ sql/reconciliation.sql       ledger reconciliation checks
 ## What I'd do next with more time
 
 - JWT authentication and per-user account ownership
+- Route every error through the JSON error body: cap amounts at the column's 17 integer digits (`@Digits`) and handle type mismatches and database errors
 - Expire idempotency keys after 24 hours, scope them per client once there is authentication, and extend them to deposits and withdrawals
 - Docker Compose (app + Postgres)
 - Pagination on the transactions endpoint
 
 ## About me
 
-Ray — MSCS, University of Delaware (May 2026), based in Wilmington DE. Open to Software Engineer and Data Analyst roles. This project is the SWE companion to my data analytics portfolio (hospital readmission risk, credit card default risk).
+Ray — MSCS, University of Delaware (May 2026), based in Newark, DE. Open to software engineering and data engineering roles. Related work: [credit card default risk analysis](https://github.com/Lego514/credit-card-default-risk) (SQL, XGBoost + SHAP, Tableau).
