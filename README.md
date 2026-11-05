@@ -26,7 +26,8 @@ A small but production-shaped core banking service: open accounts, move money, a
 | `POST` | `/api/accounts/{id}/deposit` | `{amount}` | 400, 404 |
 | `POST` | `/api/accounts/{id}/withdraw` | `{amount}` | 400, 404, **409 insufficient funds** |
 | `GET` | `/api/accounts/{id}/transactions` | Ledger, newest first | 404 |
-| `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}`; optional `Idempotency-Key` header | 400, 404, 409, **422 key reused** |
+| `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}`; optional `Idempotency-Key` header. **201** with a receipt and a `Location` | 400, 404, 409, **422 key reused** |
+| `GET` | `/api/transfers/{transferId}` | The receipt of a past transfer | 400, 404 |
 
 Every error returns the same JSON body:
 
@@ -41,6 +42,7 @@ Every error returns the same JSON body:
 | `INVALID_PARAMETER` | 400 | A path variable of the wrong type, such as `/api/accounts/abc` |
 | `MALFORMED_REQUEST` | 400 | The body is missing or isn't valid JSON |
 | `ACCOUNT_NOT_FOUND` | 404 | No such account |
+| `TRANSFER_NOT_FOUND` | 404 | No transfer with that id |
 | `INSUFFICIENT_FUNDS` | 409 | Withdrawal or transfer larger than the balance |
 | `IDEMPOTENCY_KEY_IN_PROGRESS` | 409 | A request with the same key hasn't finished |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | The same key with a different body |
@@ -55,6 +57,7 @@ Every error returns the same JSON body:
 - **Pessimistic row locks for concurrent updates.** Balance updates use `SELECT … FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`) so two simultaneous withdrawals can't both read the same balance and double-spend.
 - **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other. `TransferConcurrencyTest` checks this on a real PostgreSQL in CI: 100 opposite transfers released at once, with no deadlock, no money created or destroyed, and no balance below zero.
 - **Transfers are one database transaction.** The debit, credit, and both ledger rows commit together; if the debit fails everything rolls back (`@Transactional`).
+- **A transfer receipt tells the payer nothing about the payee.** It is built from the payer's ledger row alone: transfer id, amount, the payer's balance after, and the payee only as the account id the payer already gave. (The response used to return both accounts in full, the payee's name and balance included.) Timestamps are cut to microseconds before they are stored, because that is all PostgreSQL keeps; otherwise the receipt returned on creation and the one read back later would disagree.
 - **Idempotent transfers.** A client that times out can't tell whether its transfer happened, so it retries. With an `Idempotency-Key` header, the key's row is inserted first, in the same transaction as the transfer, and its primary key rejects a second use. A retry with the same key and body gets the stored response back (`Idempotent-Replayed: true`) and moves no money; the same key with a different body is rejected with 422; a transfer that fails rolls its key back, so retrying it runs it for real. `TransferConcurrencyTest` sends one request 8 times at once on a real PostgreSQL and checks the money moves once. The web console sends a key with every transfer, so a double-click can't pay twice.
 - **Ledger rows are immutable and store `balanceAfter`.** You can audit any account's history without replaying it, and no code path ever updates or deletes a ledger row. Both legs of a transfer share a `transferId`, so they can be paired exactly.
 
@@ -110,16 +113,16 @@ As configured here, all three are public and `health` shows full details (databa
 ## Tests & CI
 
 ```bash
-mvn test                          # 33 tests on H2; the 9 PostgreSQL tests are skipped
-POSTGRES_TESTS=true mvn test      # all 42 (needs Docker)
+mvn test                          # 37 tests on H2; the 9 PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 46 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 42 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 46 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-42 tests across three layers:
+46 tests across three layers:
 
-- **Service layer** (`AccountServiceTest`, 14 tests) — balance math, overdraft rejection, amount validation, the maximum balance, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
-- **Web layer** (`AccountControllerTest`, 17 tests; `UnexpectedErrorTest`, 2 tests) — full HTTP round-trips through MockMvc asserting status codes and the JSON error body for every kind of error (400/404/405/409/415/422, and a 500 that leaks no internals), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
+- **Service layer** (`AccountServiceTest`, 15 tests) — balance math, overdraft rejection, amount validation, the maximum balance, transfer receipts, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
+- **Web layer** (`AccountControllerTest`, 20 tests; `UnexpectedErrorTest`, 2 tests) — full HTTP round-trips through MockMvc asserting status codes, transfer receipts (201 with a `Location` that reads back the same receipt, nothing about the payee in it) and the JSON error body for every kind of error (400/404/405/409/415/422, and a 500 that leaks no internals), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
 - **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 3 tests) — a smoke test that the datasource really is PostgreSQL, and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
 - **Ledger reconciliation on real PostgreSQL** (`LedgerReconciliationTest`, 6 tests) — every check in `sql/reconciliation.sql` passes on a clean ledger, and each one catches the corruption it is written for (see above).
 

@@ -176,7 +176,7 @@ document.getElementById("transfer-form").addEventListener("submit", async (e) =>
       body: JSON.stringify({ fromAccountId, toAccountId, amount }),
     });
     transferKey = crypto.randomUUID();
-    toast(`Transferred ${fmtMoney(amount)} from #${result.from.id} to #${result.to.id}`, "success");
+    toast(`Transferred ${fmtMoney(amount)} from #${result.fromAccountId} to #${result.toAccountId} · receipt ${result.transferId.slice(0, 8)}`, "success");
     document.getElementById("transfer-amount").value = "";
     await refreshAll();
   } catch (err) {

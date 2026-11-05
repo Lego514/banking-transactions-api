@@ -69,7 +69,7 @@ public class TransactionRecord {
         this.balanceAfter = balanceAfter;
         this.counterpartyAccountId = counterpartyAccountId;
         this.transferId = transferId;
-        this.timestamp = Instant.now();
+        this.timestamp = Timestamps.now();
     }
 
     public Long getId() {

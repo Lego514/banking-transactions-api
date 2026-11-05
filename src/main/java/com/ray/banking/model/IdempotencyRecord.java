@@ -52,7 +52,7 @@ public class IdempotencyRecord implements Persistable<String> {
     public IdempotencyRecord(String idempotencyKey, String requestHash) {
         this.idempotencyKey = idempotencyKey;
         this.requestHash = requestHash;
-        this.createdAt = Instant.now();
+        this.createdAt = Timestamps.now();
     }
 
     public void complete(String responseBody) {

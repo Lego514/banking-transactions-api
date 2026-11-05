@@ -23,7 +23,9 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.io.UncheckedIOException;
+import java.net.URI;
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api")
@@ -76,8 +78,12 @@ public class AccountController {
     }
 
     /**
-     * With an {@code Idempotency-Key} header, a retried request (same key, same
-     * body) gets the original response back, marked {@code Idempotent-Replayed:
+     * Creates a transfer and answers 201 with its receipt and a Location to read
+     * it again. The receipt names the payee only by account id: no name, no
+     * balance.
+     *
+     * <p>With an {@code Idempotency-Key} header, a retried request (same key, same
+     * body) gets the original receipt back, marked {@code Idempotent-Replayed:
      * true}, and moves no money. Without the header every request is a new
      * transfer.
      */
@@ -86,20 +92,29 @@ public class AccountController {
             @RequestHeader(name = IDEMPOTENCY_KEY, required = false) String idempotencyKey,
             @Valid @RequestBody TransferRequest request) {
         if (idempotencyKey == null) {
-            return ResponseEntity.ok(executeTransfer(request));
+            TransferResponse receipt = executeTransfer(request);
+            return created(receipt).body(receipt);
         }
         IdempotencyService.Result result = idempotencyService.execute(
                 idempotencyKey, describe(request), () -> toJson(executeTransfer(request)));
-        return ResponseEntity.ok()
+        TransferResponse receipt = fromJson(result.responseBody());
+        return created(receipt)
                 .header(IDEMPOTENT_REPLAYED, String.valueOf(result.replayed()))
-                .body(fromJson(result.responseBody()));
+                .body(receipt);
+    }
+
+    @GetMapping("/transfers/{transferId}")
+    public TransferResponse getTransfer(@PathVariable UUID transferId) {
+        return TransferResponse.from(accountService.getTransfer(transferId));
     }
 
     private TransferResponse executeTransfer(TransferRequest request) {
-        AccountService.Transfer result = accountService.transfer(
-                request.fromAccountId(), request.toAccountId(), request.amount());
-        return new TransferResponse(
-                AccountResponse.from(result.from()), AccountResponse.from(result.to()));
+        return TransferResponse.from(accountService.transfer(
+                request.fromAccountId(), request.toAccountId(), request.amount()));
+    }
+
+    private static ResponseEntity.BodyBuilder created(TransferResponse receipt) {
+        return ResponseEntity.created(URI.create("/api/transfers/" + receipt.transferId()));
     }
 
     /** What makes two requests "the same": 10 and 10.00 are the same amount. */

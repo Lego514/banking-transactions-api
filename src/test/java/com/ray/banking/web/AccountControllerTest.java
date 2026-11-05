@@ -11,6 +11,8 @@ import org.springframework.test.web.servlet.ResultActions;
 
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -88,22 +90,63 @@ class AccountControllerTest {
     }
 
     @Test
-    void transfer_endToEnd_movesMoneyBetweenAccounts() throws Exception {
+    void transfer_endToEnd_movesMoneyAndReturnsAReceipt() throws Exception {
         long from = createAccount("Sender", "300.00");
         long to = createAccount("Receiver", "0");
 
-        mockMvc.perform(post("/api/transfers")
+        MvcResult result = mockMvc.perform(post("/api/transfers")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"fromAccountId\":%d,\"toAccountId\":%d,\"amount\":120.50}"
                                 .formatted(from, to)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.from.balance").value(179.50))
-                .andExpect(jsonPath("$.to.balance").value(120.50));
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", startsWith("/api/transfers/")))
+                .andExpect(jsonPath("$.transferId").isNotEmpty())
+                .andExpect(jsonPath("$.fromAccountId").value((int) from))
+                .andExpect(jsonPath("$.toAccountId").value((int) to))
+                .andExpect(jsonPath("$.amount").value(120.50))
+                .andExpect(jsonPath("$.fromBalanceAfter").value(179.50))
+                .andReturn();
 
         mockMvc.perform(get("/api/accounts/" + to + "/transactions"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].type").value("TRANSFER_IN"))
                 .andExpect(jsonPath("$[0].counterpartyAccountId").value((int) from));
+
+        // The receipt can be read back at its Location, unchanged.
+        mockMvc.perform(get(result.getResponse().getHeader("Location")))
+                .andExpect(status().isOk())
+                .andExpect(content().json(result.getResponse().getContentAsString()));
+    }
+
+    @Test
+    void transfer_receiptTellsThePayerNothingAboutThePayee() throws Exception {
+        long from = createAccount("Sender", "300.00");
+        long to = createAccount("Very Private Payee", "5000.00");
+
+        String body = mockMvc.perform(post("/api/transfers")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"fromAccountId\":%d,\"toAccountId\":%d,\"amount\":10.00}"
+                                .formatted(from, to)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.to").doesNotExist())
+                .andReturn().getResponse().getContentAsString();
+
+        // Neither the payee's name nor their new balance (5010.00) is in the receipt.
+        assertThat(body).doesNotContain("Very Private Payee").doesNotContain("5010");
+    }
+
+    @Test
+    void getTransfer_unknownId_returns404() throws Exception {
+        mockMvc.perform(get("/api/transfers/" + UUID.randomUUID()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("TRANSFER_NOT_FOUND"));
+    }
+
+    @Test
+    void getTransfer_idThatIsNotAUuid_returns400() throws Exception {
+        mockMvc.perform(get("/api/transfers/not-a-uuid"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"));
     }
 
     private ResultActions transferWithKey(String key, long from, long to, String amount) throws Exception {
@@ -120,12 +163,12 @@ class AccountControllerTest {
         String key = UUID.randomUUID().toString();
 
         String firstBody = transferWithKey(key, from, to, "120.50")
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(header().string("Idempotent-Replayed", "false"))
                 .andReturn().getResponse().getContentAsString();
 
         transferWithKey(key, from, to, "120.50")
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(header().string("Idempotent-Replayed", "true"))
                 .andExpect(content().string(firstBody));
 
@@ -141,7 +184,7 @@ class AccountControllerTest {
         long to = createAccount("Receiver", "0");
         String key = UUID.randomUUID().toString();
 
-        transferWithKey(key, from, to, "100.00").andExpect(status().isOk());
+        transferWithKey(key, from, to, "100.00").andExpect(status().isCreated());
 
         transferWithKey(key, from, to, "999.00")
                 .andExpect(status().isUnprocessableEntity())
@@ -169,9 +212,9 @@ class AccountControllerTest {
         // The failed attempt rolled its key back with it, so this is a real
         // transfer, not a replay of the 409.
         transferWithKey(key, from, to, "100.00")
-                .andExpect(status().isOk())
+                .andExpect(status().isCreated())
                 .andExpect(header().string("Idempotent-Replayed", "false"))
-                .andExpect(jsonPath("$.from.balance").value(50.00));
+                .andExpect(jsonPath("$.fromBalanceAfter").value(50.00));
     }
 
     // ---------- every error has the JSON body, not only the domain ones ----------
