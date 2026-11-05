@@ -1,6 +1,7 @@
 package com.ray.banking.model;
 
 import com.ray.banking.exception.InsufficientFundsException;
+import com.ray.banking.exception.InvalidTransactionException;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -14,6 +15,9 @@ import java.time.Instant;
 @Entity
 @Table(name = "accounts")
 public class Account {
+
+    /** The largest value the balance column, numeric(19,2), can hold. */
+    public static final BigDecimal MAX_BALANCE = new BigDecimal("99999999999999999.99");
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -38,9 +42,18 @@ public class Account {
         this.createdAt = Instant.now();
     }
 
-    /** Adds funds to the account. Amount must already be validated as positive. */
+    /**
+     * Adds funds to the account. Amount must already be validated as positive.
+     * Each amount fits the column on its own, but a sum of them may not, so the
+     * new balance is checked here rather than left to fail in the database.
+     */
     public void credit(BigDecimal amount) {
-        this.balance = this.balance.add(amount);
+        BigDecimal newBalance = this.balance.add(amount);
+        if (newBalance.compareTo(MAX_BALANCE) > 0) {
+            throw new InvalidTransactionException("Account %d cannot hold more than %s"
+                    .formatted(id, MAX_BALANCE.toPlainString()));
+        }
+        this.balance = newBalance;
     }
 
     /** Removes funds from the account, rejecting overdrafts. */
