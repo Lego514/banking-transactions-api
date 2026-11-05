@@ -8,6 +8,11 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -28,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Transfers under real concurrency, on a real PostgreSQL.
@@ -39,10 +45,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * PostgreSQL's, because the claim under test is how PostgreSQL's
  * {@code SELECT ... FOR UPDATE} behaves when two transfers collide.
  *
+ * <p>Runs with the {@code postgres} profile, so it tests the configuration the
+ * app runs with on PostgreSQL (the lock timeout included); the container
+ * supplies the URL and credentials.
+ *
  * <p>Needs Docker, so it only runs when {@code POSTGRES_TESTS=true}; CI sets it.
  * On a machine with Docker: {@code set POSTGRES_TESTS=true} then {@code mvn test}.
  */
 @SpringBootTest
+@ActiveProfiles("postgres")
 @Testcontainers
 @EnabledIfEnvironmentVariable(named = "POSTGRES_TESTS", matches = "true",
         disabledReason = "needs Docker; CI sets POSTGRES_TESTS=true")
@@ -60,6 +71,12 @@ class TransferConcurrencyTest {
 
     @Autowired
     private DataSource dataSource;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     /** Proves the setup itself: these tests really talk to PostgreSQL, and a transfer commits. */
     @Test
@@ -198,6 +215,53 @@ class TransferConcurrencyTest {
         assertThat(balanceOf(a)).isEqualByComparingTo("90.00");
         assertThat(balanceOf(b)).isEqualByComparingTo("10.00");
         assertThat(ledgerEntries(a, b, TransactionType.TRANSFER_OUT)).isEqualTo(1);
+    }
+
+    /**
+     * A transfer that finds an account locked by another transaction gives up
+     * after PostgreSQL's lock_timeout (3 s, set per connection by the postgres
+     * profile) instead of waiting forever, and moves nothing. The API answers
+     * that exception with a 503 and Retry-After.
+     */
+    @Test
+    void transferBehindAHeldLock_givesUpAfterTheLockTimeout() throws Exception {
+        assertThat(jdbc.queryForObject("show lock_timeout", String.class)).isEqualTo("3s");
+
+        long a = service.createAccount("A", new BigDecimal("100.00")).getId();
+        long b = service.createAccount("B", null).getId();
+
+        // Another transaction takes A's row lock and holds it until released.
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService holder = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holding = holder.submit(() -> new TransactionTemplate(transactionManager)
+                    .executeWithoutResult(status -> {
+                        jdbc.queryForObject("select id from accounts where id = ? for update", Long.class, a);
+                        locked.countDown();
+                        try {
+                            release.await(30, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).as("holder took the lock").isTrue();
+
+            long start = System.nanoTime();
+            assertThatThrownBy(() -> service.transfer(a, b, AMOUNT))
+                    .isInstanceOf(PessimisticLockingFailureException.class);
+            long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+            assertThat(waitedMs).as("ms waited for the lock").isBetween(2_500L, 10_000L);
+
+            release.countDown();
+            holding.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            holder.shutdownNow();
+        }
+
+        assertThat(balanceOf(a)).isEqualByComparingTo("100.00");
+        assertThat(balanceOf(b)).isEqualByComparingTo("0");
     }
 
     /** True if the transfer went through; false if it was refused for lack of funds, the one failure allowed here. */

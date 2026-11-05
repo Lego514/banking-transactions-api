@@ -47,6 +47,7 @@ Every error returns the same JSON body:
 | `IDEMPOTENCY_KEY_IN_PROGRESS` | 409 | A request with the same key hasn't finished |
 | `IDEMPOTENCY_KEY_REUSED` | 422 | The same key with a different body |
 | `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, … | 404, 405, 415, … | Spring MVC's own errors, named after their status |
+| `ACCOUNT_BUSY` | 503 | Another transaction held the account's row lock past the 3 s lock timeout (or the database broke a deadlock); sent with `Retry-After: 1` |
 | `DATABASE_ERROR`, `INTERNAL_ERROR` | 500 | A failure on our side; logged in full, answered with a generic message that leaks no hosts, SQL or class names |
 
 `GlobalExceptionHandler` extends Spring's `ResponseEntityExceptionHandler`, so the framework's errors go through the same body instead of an empty one.
@@ -56,6 +57,7 @@ Every error returns the same JSON body:
 - **`BigDecimal` for money, never `double`.** Binary floating point cannot represent 0.10 exactly; ledgers drift. Amounts are validated to ≤ 2 decimal places at the service boundary.
 - **Pessimistic row locks for concurrent updates.** Balance updates use `SELECT … FOR UPDATE` (`@Lock(PESSIMISTIC_WRITE)`) so two simultaneous withdrawals can't both read the same balance and double-spend.
 - **Deadlock-free transfers.** A transfer locks both accounts **in ascending id order**. Two opposite transfers (A→B and B→A) therefore acquire locks in the same order and can never deadlock each other. `TransferConcurrencyTest` checks this on a real PostgreSQL in CI: 100 opposite transfers released at once, with no deadlock, no money created or destroyed, and no balance below zero.
+- **Lock waits are bounded.** PostgreSQL's `lock_timeout` defaults to 0, so a transfer behind a stuck transaction would wait forever and pin a connection. Every connection now sets `lock_timeout = 3000` ms (H2: `LOCK_TIMEOUT=3000`), and a transfer that gives up is answered `503 ACCOUNT_BUSY` with `Retry-After`; nothing was written, and a retry with the same `Idempotency-Key` is safe. It is set per connection because Hibernate ignores the JPA lock-timeout hint on PostgreSQL, whose `FOR UPDATE` has no "wait n seconds" form.
 - **Transfers are one database transaction.** The debit, credit, and both ledger rows commit together; if the debit fails everything rolls back (`@Transactional`).
 - **A transfer receipt tells the payer nothing about the payee.** It is built from the payer's ledger row alone: transfer id, amount, the payer's balance after, and the payee only as the account id the payer already gave. (The response used to return both accounts in full, the payee's name and balance included.) Timestamps are cut to microseconds before they are stored, because that is all PostgreSQL keeps; otherwise the receipt returned on creation and the one read back later would disagree.
 - **Idempotent transfers.** A client that times out can't tell whether its transfer happened, so it retries. With an `Idempotency-Key` header, the key's row is inserted first, in the same transaction as the transfer, and its primary key rejects a second use. A retry with the same key and body gets the stored response back (`Idempotent-Replayed: true`) and moves no money; the same key with a different body is rejected with 422; a transfer that fails rolls its key back, so retrying it runs it for real. `TransferConcurrencyTest` sends one request 8 times at once on a real PostgreSQL and checks the money moves once. The web console sends a key with every transfer, so a double-click can't pay twice.
@@ -113,17 +115,17 @@ As configured here, all three are public and `health` shows full details (databa
 ## Tests & CI
 
 ```bash
-mvn test                          # 37 tests on H2; the 9 PostgreSQL tests are skipped
-POSTGRES_TESTS=true mvn test      # all 46 (needs Docker)
+mvn test                          # 38 tests on H2; the 10 PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 48 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 46 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 48 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-46 tests across three layers:
+48 tests across three layers:
 
 - **Service layer** (`AccountServiceTest`, 15 tests) — balance math, overdraft rejection, amount validation, the maximum balance, transfer receipts, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
-- **Web layer** (`AccountControllerTest`, 20 tests; `UnexpectedErrorTest`, 2 tests) — full HTTP round-trips through MockMvc asserting status codes, transfer receipts (201 with a `Location` that reads back the same receipt, nothing about the payee in it) and the JSON error body for every kind of error (400/404/405/409/415/422, and a 500 that leaks no internals), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
-- **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 3 tests) — a smoke test that the datasource really is PostgreSQL, and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
+- **Web layer** (`AccountControllerTest`, 20 tests; `UnexpectedErrorTest`, 3 tests) — full HTTP round-trips through MockMvc asserting status codes, transfer receipts (201 with a `Location` that reads back the same receipt, nothing about the payee in it) and the JSON error body for every kind of error (400/404/405/409/415/422, a 503 with `Retry-After` for a lock timeout, and a 500 that leaks no internals), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
+- **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 4 tests; run with the `postgres` profile) — a smoke test that the datasource really is PostgreSQL, a lock-timeout test (another transaction holds an account's row lock; the transfer gives up after about 3 s and moves nothing), and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
 - **Ledger reconciliation on real PostgreSQL** (`LedgerReconciliationTest`, 6 tests) — every check in `sql/reconciliation.sql` passes on a clean ledger, and each one catches the corruption it is written for (see above).
 
 ## Repository structure
