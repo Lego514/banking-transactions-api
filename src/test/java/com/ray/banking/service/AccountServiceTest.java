@@ -3,6 +3,7 @@ package com.ray.banking.service;
 import com.ray.banking.exception.AccountNotFoundException;
 import com.ray.banking.exception.InsufficientFundsException;
 import com.ray.banking.exception.InvalidTransactionException;
+import com.ray.banking.exception.TransferNotFoundException;
 import com.ray.banking.model.Account;
 import com.ray.banking.model.TransactionRecord;
 import com.ray.banking.model.TransactionType;
@@ -15,6 +16,7 @@ import org.springframework.context.annotation.Import;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -132,8 +134,9 @@ class AccountServiceTest {
             AccountService.Transfer result =
                     service.transfer(alice.getId(), bob.getId(), new BigDecimal("75.00"));
 
-            assertThat(result.from().getBalance()).isEqualByComparingTo("125.00");
-            assertThat(result.to().getBalance()).isEqualByComparingTo("75.00");
+            assertThat(result.fromBalanceAfter()).isEqualByComparingTo("125.00");
+            assertThat(service.getAccount(alice.getId()).getBalance()).isEqualByComparingTo("125.00");
+            assertThat(service.getAccount(bob.getId()).getBalance()).isEqualByComparingTo("75.00");
 
             List<TransactionRecord> aliceTxns = service.getTransactions(alice.getId());
             assertThat(aliceTxns.get(0).getType()).isEqualTo(TransactionType.TRANSFER_OUT);
@@ -148,6 +151,16 @@ class AccountServiceTest {
                     .isNotNull()
                     .isEqualTo(bobTxns.get(0).getTransferId());
             assertThat(aliceTxns.get(1).getTransferId()).isNull();
+
+            // The receipt names that transfer, and reads back the same.
+            assertThat(result.transferId()).isEqualTo(aliceTxns.get(0).getTransferId());
+            assertThat(service.getTransfer(result.transferId())).isEqualTo(result);
+        }
+
+        @Test
+        void getTransfer_unknownId_throwsNotFound() {
+            assertThatThrownBy(() -> service.getTransfer(UUID.randomUUID()))
+                    .isInstanceOf(TransferNotFoundException.class);
         }
 
         @Test

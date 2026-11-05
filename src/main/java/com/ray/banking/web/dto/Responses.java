@@ -3,6 +3,7 @@ package com.ray.banking.web.dto;
 import com.ray.banking.model.Account;
 import com.ray.banking.model.TransactionRecord;
 import com.ray.banking.model.TransactionType;
+import com.ray.banking.service.AccountService;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -32,6 +33,13 @@ public final class Responses {
         }
     }
 
-    public record TransferResponse(AccountResponse from, AccountResponse to) {
+    /** A transfer receipt: the payee appears only as an account id. */
+    public record TransferResponse(UUID transferId, Long fromAccountId, Long toAccountId, BigDecimal amount,
+                                   BigDecimal fromBalanceAfter, Instant timestamp) {
+
+        public static TransferResponse from(AccountService.Transfer transfer) {
+            return new TransferResponse(transfer.transferId(), transfer.fromAccountId(), transfer.toAccountId(),
+                    transfer.amount(), transfer.fromBalanceAfter(), transfer.timestamp());
+        }
     }
 }

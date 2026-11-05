@@ -39,7 +39,7 @@ public class Account {
     public Account(String ownerName) {
         this.ownerName = ownerName;
         this.balance = BigDecimal.ZERO;
-        this.createdAt = Instant.now();
+        this.createdAt = Timestamps.now();
     }
 
     /**

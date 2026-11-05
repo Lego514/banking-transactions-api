@@ -2,6 +2,7 @@ package com.ray.banking.service;
 
 import com.ray.banking.exception.AccountNotFoundException;
 import com.ray.banking.exception.InvalidTransactionException;
+import com.ray.banking.exception.TransferNotFoundException;
 import com.ray.banking.model.Account;
 import com.ray.banking.model.TransactionRecord;
 import com.ray.banking.model.TransactionType;
@@ -11,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -87,9 +89,17 @@ public class AccountService {
         from.debit(amount);
         to.credit(amount);
         UUID transferId = UUID.randomUUID();
-        record(from, TransactionType.TRANSFER_OUT, amount, to.getId(), transferId);
+        TransactionRecord outLeg = record(from, TransactionType.TRANSFER_OUT, amount, to.getId(), transferId);
         record(to, TransactionType.TRANSFER_IN, amount, from.getId(), transferId);
-        return new Transfer(from, to);
+        return Transfer.from(outLeg);
+    }
+
+    /** The receipt of a past transfer, read back from the payer's ledger row. */
+    @Transactional(readOnly = true)
+    public Transfer getTransfer(UUID transferId) {
+        return transactionRepository.findByTransferIdAndType(transferId, TransactionType.TRANSFER_OUT)
+                .map(Transfer::from)
+                .orElseThrow(() -> new TransferNotFoundException(transferId));
     }
 
     @Transactional(readOnly = true)
@@ -103,9 +113,9 @@ public class AccountService {
                 .orElseThrow(() -> new AccountNotFoundException(accountId));
     }
 
-    private void record(Account account, TransactionType type, BigDecimal amount,
-                        Long counterpartyId, UUID transferId) {
-        transactionRepository.save(new TransactionRecord(
+    private TransactionRecord record(Account account, TransactionType type, BigDecimal amount,
+                                     Long counterpartyId, UUID transferId) {
+        return transactionRepository.save(new TransactionRecord(
                 account.getId(), type, amount, account.getBalance(), counterpartyId, transferId));
     }
 
@@ -118,6 +128,18 @@ public class AccountService {
         }
     }
 
-    public record Transfer(Account from, Account to) {
+    /**
+     * A transfer receipt. It is built from the payer's ledger row alone, so it
+     * carries the payer's balance after the transfer and nothing about the
+     * payee beyond the account id the payer already knew: a transfer must not
+     * tell the payer someone else's name or balance.
+     */
+    public record Transfer(UUID transferId, Long fromAccountId, Long toAccountId, BigDecimal amount,
+                           BigDecimal fromBalanceAfter, Instant timestamp) {
+
+        static Transfer from(TransactionRecord outLeg) {
+            return new Transfer(outLeg.getTransferId(), outLeg.getAccountId(), outLeg.getCounterpartyAccountId(),
+                    outLeg.getAmount(), outLeg.getBalanceAfter(), outLeg.getTimestamp());
+        }
     }
 }

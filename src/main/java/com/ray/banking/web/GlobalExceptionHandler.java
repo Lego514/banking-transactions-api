@@ -5,6 +5,7 @@ import com.ray.banking.exception.IdempotencyKeyInProgressException;
 import com.ray.banking.exception.IdempotencyKeyReusedException;
 import com.ray.banking.exception.InsufficientFundsException;
 import com.ray.banking.exception.InvalidTransactionException;
+import com.ray.banking.exception.TransferNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
@@ -51,6 +52,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(AccountNotFoundException.class)
     public ResponseEntity<ApiError> handleNotFound(AccountNotFoundException ex) {
         return error(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", ex.getMessage());
+    }
+
+    @ExceptionHandler(TransferNotFoundException.class)
+    public ResponseEntity<ApiError> handleTransferNotFound(TransferNotFoundException ex) {
+        return error(HttpStatus.NOT_FOUND, "TRANSFER_NOT_FOUND", ex.getMessage());
     }
 
     @ExceptionHandler(InsufficientFundsException.class)

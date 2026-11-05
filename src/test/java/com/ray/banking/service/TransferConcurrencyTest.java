@@ -182,7 +182,7 @@ class TransferConcurrencyTest {
                 outcomes.add(pool.submit(() -> {
                     startGate.await();
                     return idempotency.execute(key, request,
-                            () -> service.transfer(a, b, AMOUNT).from().getBalance().toPlainString());
+                            () -> service.transfer(a, b, AMOUNT).fromBalanceAfter().toPlainString());
                 }));
             }
             startGate.countDown();
