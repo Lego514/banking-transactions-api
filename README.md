@@ -28,13 +28,26 @@ A small but production-shaped core banking service: open accounts, move money, a
 | `GET` | `/api/accounts/{id}/transactions` | Ledger, newest first | 404 |
 | `POST` | `/api/transfers` | `{fromAccountId, toAccountId, amount}`; optional `Idempotency-Key` header | 400, 404, 409, **422 key reused** |
 
-Business and validation errors (the codes in the table) return a consistent JSON body:
+Every error returns the same JSON body:
 
 ```json
 { "status": 409, "code": "INSUFFICIENT_FUNDS", "message": "Account 1 has insufficient funds: balance 5.00, requested 10.00", "timestamp": "..." }
 ```
 
-Errors raised by the framework or the database don't go through that handler yet: a non-numeric id such as `/api/accounts/abc` returns a 400 with an empty body, and an amount too large for the `numeric(19,2)` column returns a 500.
+| Code | Status | When |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | A request field breaks a rule, including an amount above 99,999,999,999,999,999.99 (the largest a `numeric(19,2)` column holds) |
+| `INVALID_TRANSACTION` | 400 | Amount not positive, more than 2 decimal places, a transfer to the same account, a balance that would pass the column's maximum, or an `Idempotency-Key` that is blank or over 255 characters |
+| `INVALID_PARAMETER` | 400 | A path variable of the wrong type, such as `/api/accounts/abc` |
+| `MALFORMED_REQUEST` | 400 | The body is missing or isn't valid JSON |
+| `ACCOUNT_NOT_FOUND` | 404 | No such account |
+| `INSUFFICIENT_FUNDS` | 409 | Withdrawal or transfer larger than the balance |
+| `IDEMPOTENCY_KEY_IN_PROGRESS` | 409 | A request with the same key hasn't finished |
+| `IDEMPOTENCY_KEY_REUSED` | 422 | The same key with a different body |
+| `NOT_FOUND`, `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, … | 404, 405, 415, … | Spring MVC's own errors, named after their status |
+| `DATABASE_ERROR`, `INTERNAL_ERROR` | 500 | A failure on our side; logged in full, answered with a generic message that leaks no hosts, SQL or class names |
+
+`GlobalExceptionHandler` extends Spring's `ResponseEntityExceptionHandler`, so the framework's errors go through the same body instead of an empty one.
 
 ## Engineering decisions worth asking me about
 
@@ -97,16 +110,16 @@ As configured here, all three are public and `health` shows full details (databa
 ## Tests & CI
 
 ```bash
-mvn test                          # 23 tests on H2; the 9 PostgreSQL tests are skipped
-POSTGRES_TESTS=true mvn test      # all 32 (needs Docker)
+mvn test                          # 33 tests on H2; the 9 PostgreSQL tests are skipped
+POSTGRES_TESTS=true mvn test      # all 42 (needs Docker)
 ```
 
-Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 32 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
+Every push and pull request triggers a GitHub Actions pipeline (`.github/workflows/ci.yml`) that builds the project and runs all 42 tests on JDK 21, including the PostgreSQL ones (Testcontainers starts PostgreSQL 16 in Docker); failed runs upload the surefire reports as an artifact for debugging.
 
-32 tests across three layers:
+42 tests across three layers:
 
-- **Service layer** (`AccountServiceTest`, 13 tests) — balance math, overdraft rejection, amount validation, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
-- **Web layer** (`AccountControllerTest`, 10 tests) — full HTTP round-trips through MockMvc asserting status codes and JSON error contracts (201/400/404/409/422), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
+- **Service layer** (`AccountServiceTest`, 14 tests) — balance math, overdraft rejection, amount validation, the maximum balance, transfer atomicity (failed transfers leave both balances and the ledger untouched), same-account rejection, ledger ordering
+- **Web layer** (`AccountControllerTest`, 17 tests; `UnexpectedErrorTest`, 2 tests) — full HTTP round-trips through MockMvc asserting status codes and the JSON error body for every kind of error (400/404/405/409/415/422, and a 500 that leaks no internals), plus idempotency: a retry replays the first response and moves money once, a reused key with a different body gets 422, a failed transfer can be retried under the same key, and an over-long key is rejected
 - **Concurrency on real PostgreSQL** (`TransferConcurrencyTest`, 3 tests) — a smoke test that the datasource really is PostgreSQL, and two races. Opposite transfers: 50 A→B and 50 B→A released together on 8 threads, asserting that nothing failed except for insufficient funds (a deadlock would fail it), the total is unchanged, no balance went below zero, and the ledger has one entry per side of every transfer that went through. Retry storm: one request with one `Idempotency-Key` sent 8 times at once, asserting exactly one copy moved money and the other 7 got its response back. H2 can't stand in here, because the claims under test are about PostgreSQL's row locks and unique index.
 - **Ledger reconciliation on real PostgreSQL** (`LedgerReconciliationTest`, 6 tests) — every check in `sql/reconciliation.sql` passes on a clean ledger, and each one catches the corruption it is written for (see above).
 
@@ -126,7 +139,6 @@ sql/reconciliation.sql       ledger reconciliation checks
 ## What I'd do next with more time
 
 - JWT authentication and per-user account ownership
-- Route every error through the JSON error body: cap amounts at the column's 17 integer digits (`@Digits`) and handle type mismatches and database errors
 - Expire idempotency keys after 24 hours, scope them per client once there is authentication, and extend them to deposits and withdrawals
 - Docker Compose (app + Postgres)
 - Pagination on the transactions endpoint

@@ -83,6 +83,17 @@ class AccountServiceTest {
                     .isInstanceOf(InvalidTransactionException.class)
                     .hasMessageContaining("2 decimal places");
         }
+
+        @Test
+        void pastTheMaximumBalance_isRejectedAndLeavesBalanceUntouched() {
+            Account account = service.createAccount("Rich", new BigDecimal("99999999999999999.00"));
+
+            assertThatThrownBy(() -> service.deposit(account.getId(), new BigDecimal("1.00")))
+                    .isInstanceOf(InvalidTransactionException.class)
+                    .hasMessageContaining("cannot hold more than");
+            assertThat(service.getAccount(account.getId()).getBalance())
+                    .isEqualByComparingTo("99999999999999999.00");
+        }
     }
 
     @Nested
