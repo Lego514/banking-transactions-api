@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -41,6 +42,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <p>Needs Docker, so it only runs when {@code POSTGRES_TESTS=true}; CI sets it.
  */
 @SpringBootTest
+@ActiveProfiles("postgres")
 @Testcontainers
 @EnabledIfEnvironmentVariable(named = "POSTGRES_TESTS", matches = "true",
         disabledReason = "needs Docker; CI sets POSTGRES_TESTS=true")

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -122,6 +123,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     // ---------- failures on our side ----------
+
+    /**
+     * Another transaction held an account's row lock past the lock timeout
+     * (3 s), or the database broke a deadlock. Nothing was written, and trying
+     * again shortly will usually work, so this is a 503 with Retry-After
+     * rather than a 500. A retried transfer is safe with an Idempotency-Key.
+     */
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> handleLockFailure(PessimisticLockingFailureException ex) {
+        log.warn("Gave up waiting for a row lock: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(ApiError.of(HttpStatus.SERVICE_UNAVAILABLE, "ACCOUNT_BUSY",
+                        "The account is busy with another transaction; please retry shortly"));
+    }
 
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<ApiError> handleDatabaseError(DataAccessException ex) {

@@ -1,7 +1,9 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:banking;DB_CLOSE_DELAY=-1
-    driver-class-name: org.h2.Driver
+    # No driver-class-name: Spring Boot picks the driver from the URL. Naming
+    # H2's here kept it for the postgres profile too, which then failed to start.
+    # LOCK_TIMEOUT: give up on a row lock after 3 s (answered as 503, see below).
+    url: jdbc:h2:mem:banking;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=3000
     username: sa
     password: ""
   jpa:
@@ -40,6 +42,14 @@ spring:
     url: jdbc:postgresql://localhost:5432/banking
     username: ${DB_USER:banking}
     password: ${DB_PASSWORD:banking}
+    hikari:
+      data-source-properties:
+        # PostgreSQL's lock_timeout defaults to 0, meaning a transfer waits for a
+        # row lock forever. Every connection now gives up after 3000 ms, and the
+        # API answers 503 with Retry-After. Set per connection because Hibernate
+        # ignores the JPA lock-timeout hint on PostgreSQL: FOR UPDATE has no
+        # "wait n seconds" form there.
+        options: "-c lock_timeout=3000"
   jpa:
     hibernate:
       ddl-auto: update
