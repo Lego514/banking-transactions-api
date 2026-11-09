@@ -16,9 +16,15 @@ async function api(path, options = {}) {
   });
   const body = res.status === 204 ? null : await res.json();
   if (!res.ok) {
-    throw new Error(body && body.message ? body.message : `Request failed (${res.status})`);
+    throw new Error(errorMessage(body, res.status));
   }
   return body;
+}
+
+/** Every API error has {code, message}; show both, so the error code is visible. */
+function errorMessage(body, status) {
+  if (!body || !body.message) return `Request failed (${status})`;
+  return body.code ? `${body.code} · ${body.message}` : body.message;
 }
 
 // ---------- Toast ----------
@@ -164,20 +170,60 @@ document.getElementById("cash-form").addEventListener("submit", async (e) => {
 // A new key is drawn only after a transfer succeeds.
 let transferKey = crypto.randomUUID();
 
+// The last transfer that went through, so "Send again" can replay it exactly:
+// same key, same body, the way a client retries after a timeout.
+let lastTransfer = null;
+
+async function postTransfer(key, payload) {
+  const res = await fetch(`${API}/transfers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(errorMessage(body, res.status));
+  return { receipt: body, replayed: res.headers.get("Idempotent-Replayed") === "true" };
+}
+
+function showReceipt(receipt) {
+  document.getElementById("receipt-id").textContent = `${receipt.transferId.slice(0, 8)}…`;
+  document.getElementById("receipt-id").title = receipt.transferId;
+  document.getElementById("receipt-amount").textContent = fmtMoney(receipt.amount);
+  document.getElementById("receipt-to").textContent = `#${receipt.toAccountId}`;
+  document.getElementById("receipt-balance").textContent = fmtMoney(receipt.fromBalanceAfter);
+  document.getElementById("resend-result").classList.add("hidden");
+  document.getElementById("receipt").classList.remove("hidden");
+}
+
 document.getElementById("transfer-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const fromAccountId = Number(document.getElementById("transfer-from").value);
-  const toAccountId = Number(document.getElementById("transfer-to").value);
-  const amount = Number(document.getElementById("transfer-amount").value);
+  const payload = {
+    fromAccountId: Number(document.getElementById("transfer-from").value),
+    toAccountId: Number(document.getElementById("transfer-to").value),
+    amount: Number(document.getElementById("transfer-amount").value),
+  };
   try {
-    const result = await api("/transfers", {
-      method: "POST",
-      headers: { "Idempotency-Key": transferKey },
-      body: JSON.stringify({ fromAccountId, toAccountId, amount }),
-    });
+    const { receipt } = await postTransfer(transferKey, payload);
+    lastTransfer = { key: transferKey, payload };
     transferKey = crypto.randomUUID();
-    toast(`Transferred ${fmtMoney(amount)} from #${result.fromAccountId} to #${result.toAccountId} · receipt ${result.transferId.slice(0, 8)}`, "success");
+    showReceipt(receipt);
+    toast(`Transferred ${fmtMoney(payload.amount)} from #${receipt.fromAccountId} to #${receipt.toAccountId}`, "success");
     document.getElementById("transfer-amount").value = "";
+    await refreshAll();
+  } catch (err) {
+    toast(err.message, "error");
+  }
+});
+
+document.getElementById("resend-btn").addEventListener("click", async () => {
+  if (!lastTransfer) return;
+  const note = document.getElementById("resend-result");
+  try {
+    const { receipt, replayed } = await postTransfer(lastTransfer.key, lastTransfer.payload);
+    note.textContent = replayed
+      ? `Idempotent-Replayed: true · the server returned receipt ${receipt.transferId.slice(0, 8)}… again and moved no money`
+      : "The server ran it as a new transfer";
+    note.classList.remove("hidden");
     await refreshAll();
   } catch (err) {
     toast(err.message, "error");

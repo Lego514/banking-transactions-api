@@ -111,6 +111,19 @@
       </label>
       <button type="submit" class="primary">Send Transfer</button>
     </form>
+    <div id="receipt" class="receipt hidden" aria-live="polite">
+      <div class="receipt-head">
+        <span>Receipt</span>
+        <code id="receipt-id"></code>
+      </div>
+      <dl class="receipt-grid">
+        <dt>Amount</dt><dd id="receipt-amount"></dd>
+        <dt>To account</dt><dd id="receipt-to"></dd>
+        <dt>Your balance after</dt><dd id="receipt-balance"></dd>
+      </dl>
+      <button type="button" id="resend-btn" class="ghost small">Retry with same Idempotency-Key</button>
+      <p id="resend-result" class="receipt-note hidden"></p>
+    </div>
   </section>
 
   <section class="card wide">
