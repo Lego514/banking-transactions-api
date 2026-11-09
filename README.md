@@ -6,7 +6,9 @@
 
 A small but production-shaped core banking service: open accounts, move money, and audit every cent through an immutable transaction ledger. Built to demonstrate the engineering concerns banks actually care about — atomicity, concurrency safety, and auditability — not framework tourism.
 
-![UI screenshot](docs/ui-screenshot.png)
+![Demo: a transfer, its receipt, an idempotent retry, an error code and the ledger](docs/demo.gif)
+
+*A transfer and its receipt → the same request retried with its `Idempotency-Key` (the server replays the receipt and moves no money; the balances stay put) → an overdraft rejected with its error code → the payee's ledger. Recorded from the bundled web console.*
 
 ## Features
 
@@ -14,7 +16,7 @@ A small but production-shaped core banking service: open accounts, move money, a
 - **Deposits / withdrawals** — with overdraft rejection
 - **Atomic transfers** — both legs succeed or neither does; money is never created or destroyed
 - **Immutable ledger** — every movement writes an audit row with the post-transaction balance
-- **Web console** — a vanilla-JS dashboard served by the same app (no build step) at `http://localhost:8080`
+- **Web console** — a vanilla-JS dashboard served by the same app (no build step) at `http://localhost:8080`; it shows each transfer's receipt and can retry it with the same `Idempotency-Key`
 
 ## API
 
